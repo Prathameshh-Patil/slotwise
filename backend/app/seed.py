@@ -53,7 +53,8 @@ def main() -> None:
     with SessionLocal() as db:
         for email, password, is_admin in USERS:
             if not db.scalar(select(User).where(User.email == email)):
-                db.add(User(email=email, hashed_password=hash_password(password), is_admin=is_admin))
+                hashed = hash_password(password)
+                db.add(User(email=email, hashed_password=hashed, is_admin=is_admin))
                 print(f"Created user {email} / {password}")
         db.commit()
 
