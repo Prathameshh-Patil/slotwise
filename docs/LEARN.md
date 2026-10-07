@@ -55,3 +55,100 @@ docker compose down                       # stop (add -v to also delete the data
 - `gh pr create`: open a pull request from the current branch into `main`.
 - `gh pr checks --watch`: follow the CI status of a PR until it finishes.
 - `gh pr merge --merge --delete-branch`: merge the PR with a merge commit, keeping the small commits in history, and delete the branch.
+
+## Phase 2: Database models and migrations
+
+**What we built.** Four tables (`users`, `events`, `seats`, `bookings`) as SQLAlchemy models in `app/models/`, a database session per request (`app/core/db.py`), and Alembic migrations in `backend/alembic/`. The API runs `alembic upgrade head` every time it starts.
+
+**Why it is designed this way.**
+- *Seats are rows, and "taken" is not a column on the seat.* Whether a seat is free comes from its bookings: a seat is taken if it has a confirmed booking, or a held booking whose hold hasn't expired. Storing a `status` on the seat as well would give two sources of truth that can disagree.
+- *The partial unique index.* `UNIQUE (seat_id) WHERE status IN ('held', 'confirmed')` means a seat can have any number of old cancelled or expired bookings but only one active one. This one line is what makes double booking impossible (see Phase 4).
+- *Migrations instead of `create_all`.* `Base.metadata.create_all()` can create tables but can never change them. Alembic records each schema change as a numbered script, so every database (yours, CI's, production's) can be upgraded step by step. `alembic revision --autogenerate` compares the models with the database and writes the script. Always read it: autogenerate missed dropping the `booking_status` enum type in `downgrade()`, so we added that by hand.
+- *Timezone-aware timestamps.* Every `datetime` column is `timestamp with time zone`. A naive time like "20:00" is ambiguous once servers and users are in different zones.
+
+**How to check it.**
+```
+docker compose exec api alembic current        # which migration the database is at
+docker compose exec api alembic check          # "No new upgrade operations" = models and migrations agree
+docker compose exec db psql -U slotwise -c '\d bookings'
+```
+After changing a model: `docker compose exec api alembic revision --autogenerate -m "describe the change"`, read the file, then `alembic upgrade head`.
+
+## Phase 3: Authentication
+
+**What we built.** `POST /auth/register`, `POST /auth/login` (returns a JWT) and `GET /auth/me`. Routes declare who may call them with type aliases from `app/core/deps.py`: `CurrentUser`, `AdminUser`, `OptionalUser`.
+
+**Why it is designed this way.**
+- *bcrypt.* We never store passwords, only a bcrypt hash. bcrypt adds a random salt to each hash, so two users with the same password get different hashes, and it is deliberately slow, so guessing passwords from a leaked database is expensive. It only reads the first 72 bytes, so longer passwords are rejected rather than silently cut short.
+- *JWT.* After login, the API hands back a token signed with `SECRET_KEY` that says "user 7, valid until 11:00". On each request the API checks the signature instead of looking up a session, so any API instance can verify it. The downside: a token can't be revoked before it expires, which is why it only lasts 60 minutes.
+- *Same error for unknown email and wrong password.* Otherwise the login form tells an attacker which emails have accounts.
+- *Emails are lower-cased.* `Ana@x.com` and `ana@x.com` are the same person.
+- *Dependencies.* FastAPI runs `get_current_user` before the route and passes the user in. If the token is missing or bad, the route never runs. The `/docs` page uses the same setup for its "Authorize" button.
+
+**How to check it.** Open http://localhost:8000/docs, register through `/auth/register`, click "Authorize", log in, then call `/auth/me`.
+
+## Phase 4: Events, seat map and race-safe booking
+
+**What we built.** Admins create an event with a grid of seats. Anyone can list events and see the seat map. Logged-in users **hold** a seat (10 minutes), then **confirm** or **cancel** it. All booking rules live in `app/services/bookings.py`; the routers only translate between HTTP and those functions.
+
+**The race, and why the obvious fix doesn't work.** The naive version is: "if the seat has no active booking, insert one". Two requests arriving together both run the check, both see the seat free, and both insert. Adding a Python lock doesn't help either: it only covers one process, and production runs several. The only component that sees every request is the database, so the rule lives there as the partial unique index. Both inserts reach Postgres. The second one waits until the first commits, then fails with `UniqueViolation`, which the API turns into `409 Conflict`. There is no window in which both can succeed.
+
+**Other details.**
+- *Lapsed holds.* An expired hold still counts for the index until its status changes, so `hold_seat` first marks any lapsed hold on that seat `expired`, in the same transaction. The seat map compares `hold_expires_at` with the current time, so a seat shows as free the moment its hold lapses, whether or not the background worker has run.
+- *Confirm is one conditional UPDATE.* `UPDATE ... SET status='confirmed' WHERE id=? AND status='held' AND hold_expires_at > now()`. If the expiry task touches the same row at the same moment, Postgres row locking lets only one of them change it. "Read the row, check it in Python, then write" would have the same race as above.
+- *404 for other people's bookings, not 403.* A 403 would confirm that booking 42 exists.
+
+**Testing it.** `tests/test_concurrency.py` starts 12 threads, each with its own database connection, and holds them at a `threading.Barrier` so they all fire at the same instant. Exactly one must win. To prove the test means something, we ran it once with the index dropped: several threads "won" the same seat and both tests failed. Tests use a separate `slotwise_test` database that `conftest.py` creates and migrates, so they never touch your dev data.
+
+**How to check it.**
+```
+docker compose exec api pytest tests/test_concurrency.py -v
+python3 scripts/race_demo.py --users 100      # against the running API
+```
+
+## Phase 5: Background tasks with Celery and Redis
+
+**What we built.** A Celery worker and a Celery beat scheduler, both running the same code as the API, with Redis as the queue between them. Two tasks in `app/tasks/bookings.py`: `send_booking_confirmation` (logs the email it would send) and `release_expired_holds` (beat queues it every 30 seconds).
+
+**Why it is designed this way.**
+- *Why a queue.* Sending email can take seconds or fail. If the API sent it inline, a slow mail server would make "Confirm" slow, and a failure would turn a successful booking into an error. Instead the API puts a small message on Redis ("email booking 12") and answers straight away. The worker picks it up, and retries with growing delays if it fails.
+- *The task gets an id, not an object.* By the time the worker runs, the data may have changed, so the task loads the current row itself.
+- *`task_acks_late`.* The message is only removed from the queue once the task finishes, so a worker that crashes mid-task doesn't lose it.
+- *Beat is a separate process.* Beat is just a clock that queues tasks; the worker runs them. Run exactly one beat, or every task gets scheduled twice.
+- *Correctness never depends on the worker.* Seats free up on time even if the worker is down (Phase 4). The expiry task only tidies the stored status, e.g. for "My bookings".
+- *Tests run tasks inline.* `CELERY_TASK_ALWAYS_EAGER=true` makes `.delay()` run the task immediately, so the tests don't need Redis.
+
+**How to check it.**
+```
+docker compose logs -f worker      # confirm a booking and watch "Email to ..." appear
+docker compose logs -f beat        # "Scheduler: Sending due task release-expired-holds" every 30 s
+```
+
+## Phase 6: Next.js front end
+
+**What we built.** A Next.js 16 app (App Router, TypeScript, Tailwind 4) in `frontend/` with pages for events, the seat map, login and sign-up, my bookings, and creating events (admins only). It runs in Compose at http://localhost:3100.
+
+**Why it is designed this way.**
+- *Client components that call the API.* Every page shows live, per-user data (which seats are yours, your countdown), so the browser fetches it directly from FastAPI using the token. `lib/api.ts` is the only place that knows the API's address and turns error responses into readable messages.
+- *Auth context.* `lib/auth.tsx` keeps the logged-in user in React context, so the header and every page agree on who is logged in. On load it asks `/auth/me` whether the saved token still works.
+- *Polling the seat map every 3 seconds.* It's the simplest way to see other people's picks. WebSockets would be instant but add a second protocol to run and secure. The server still has the final say: if the map is stale, the hold gets a 409 and the page says "Too slow!".
+- *Derived state over effects.* Whether a hold is still live is computed from the countdown on every render, not stored and updated by an effect. The new React lint rules flag `setState` inside effects because it causes extra renders and states that disagree.
+- *Suspense around URL reads.* With `cacheComponents` on, Next prerenders as much as it can at build time. Anything that reads the URL (`usePathname`, `useSearchParams`, `params`) is only known per request, so it must sit inside `<Suspense>`, or the build fails.
+- *`?next=` redirect after login only accepts paths starting with a single `/`.* Otherwise a crafted link like `/login?next=https://evil.example` would send users to another site after they log in.
+- *CORS.* The page (localhost:3100) and API (localhost:8000) are different origins, so the browser blocks responses unless the API lists the page's origin in `CORS_ORIGINS`.
+
+**How to check it.** Log in as `demo@slotwise.dev` / `demo12345`, open an event, pick a seat, hold it, confirm it. Open the same event in a private window as another user and watch the seat turn grey within 3 seconds.
+
+## Phase 7: CI for the whole stack, and production images
+
+**What we built.** CI now runs the backend tests against a Postgres service, checks that migrations match the models, and has a front-end job (lint, type-check, build). The backend Dockerfile has `dev` and `prod` stages, the front end has `Dockerfile.prod`, and `docker-compose.prod.yml` runs the production stack.
+
+**Why it is designed this way.**
+- *Postgres in CI.* GitHub Actions `services:` starts a Postgres container next to the job, so CI runs exactly the tests you run locally.
+- *`alembic check` in CI.* Fails if someone changes a model but forgets to generate a migration.
+- *Multi-stage builds.* The prod API image skips pytest and ruff, and runs as a normal user, so a break-in doesn't get root in the container. The front-end image builds in one stage and copies only the result into the next.
+- *`NEXT_PUBLIC_API_URL` is a build argument.* Next.js writes `NEXT_PUBLIC_*` values into the browser JavaScript during `next build`, so changing the API address means rebuilding the image.
+- *`${SECRET_KEY:?set SECRET_KEY}` in the prod Compose file.* Compose refuses to start if it's missing, instead of quietly running production with a development secret.
+- *No database port in production.* Only the containers can reach Postgres.
+
+**What's left for a real launch.** A real email provider in `send_booking_confirmation`, payments in `confirm_booking`, a reverse proxy with HTTPS, database backups, and rate limiting on login.
