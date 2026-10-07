@@ -84,6 +84,10 @@ Admin login:            admin@slotwise.dev / (SEED_ADMIN_PASSWORD in $ENV_FILE)
 MSG
     ;;
   public)
+    # Always start a fresh tunnel. A quick tunnel that lost its connection for a
+    # while (e.g. the Mac slept) is deleted by Cloudflare and can't come back;
+    # an old container would keep retrying it and report its dead URL.
+    "${COMPOSE[@]}" --profile public rm -sf tunnel >/dev/null 2>&1 || true
     "${COMPOSE[@]}" --profile public up -d tunnel
     printf "Opening a Cloudflare tunnel "
     for _ in $(seq 1 30); do
@@ -93,7 +97,8 @@ MSG
         echo
         echo "Public URL:  $url"
         echo "API docs:    $url/api/docs"
-        echo "It works while this Mac and Docker are running. Stop it: $0 private"
+        echo "It works while this Mac is awake and Docker is running. Stop it: $0 private"
+        echo "If the Mac sleeps for long, the URL dies: run '$0 public' again for a new one."
         exit 0
       fi
       printf "."
