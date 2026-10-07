@@ -17,6 +17,8 @@ _app_url = make_url(
 TEST_DATABASE_URL = _app_url.set(database=f"{_app_url.database}_test")
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL.render_as_string(hide_password=False)
 
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -26,6 +28,8 @@ from app.core.db import SessionLocal, engine  # noqa: E402
 from app.core.security import create_access_token, hash_password  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User  # noqa: E402
+from app.schemas.event import EventCreate  # noqa: E402
+from app.services.events import create_event  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -83,3 +87,26 @@ def user_headers(make_user):
 @pytest.fixture
 def admin_headers(make_user):
     return make_user("admin@example.com", is_admin=True)
+
+
+@pytest.fixture
+def event():
+    """A future event with a 2 x 3 seat grid (A1-A3, B1-B3)."""
+    with SessionLocal() as db:
+        return create_event(
+            db,
+            EventCreate(
+                title="Jazz Night",
+                venue="Blue Hall",
+                starts_at=datetime.now(UTC) + timedelta(days=7),
+                rows=2,
+                seats_per_row=3,
+                price_cents=2500,
+            ),
+        )
+
+
+@pytest.fixture
+def seat_id(event):
+    """The id of seat A1 of the event."""
+    return event.seats[0].id

@@ -5,7 +5,7 @@ from sqlalchemy import Enum, ForeignKey, Index, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
-from app.models.event import Seat
+from app.models.event import Event, Seat
 from app.models.user import User
 
 
@@ -53,3 +53,7 @@ class Booking(Base):
 
     user: Mapped[User] = relationship()
     seat: Mapped[Seat] = relationship()
+
+    @property
+    def event(self) -> Event:
+        return self.seat.event

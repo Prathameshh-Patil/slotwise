@@ -12,6 +12,8 @@ from app.models import User
 
 # Tells the /docs page where to log in, and reads "Authorization: Bearer <token>"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+# Same, but lets requests without a token through (for pages anyone can see)
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 DbSession = Annotated[Session, Depends(get_db)]
 
@@ -29,6 +31,16 @@ def get_current_user(db: DbSession, token: Annotated[str, Depends(oauth2_scheme)
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_optional_user(
+    db: DbSession, token: Annotated[str | None, Depends(optional_oauth2_scheme)]
+) -> User | None:
+    user_id = decode_access_token(token) if token else None
+    return db.get(User, user_id) if user_id is not None else None
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 def require_admin(user: CurrentUser) -> User:
