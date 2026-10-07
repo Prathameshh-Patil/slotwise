@@ -1,0 +1,33 @@
+[project]
+name = "slotwise-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.142",
+    "uvicorn[standard]>=0.54",
+    "pydantic-settings>=2.15",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1",
+    "httpx>=0.28",  # used by FastAPI's TestClient
+    "ruff>=0.16",
+]
+
+# The backend is an app, not a library, so there is no package to build.
+# pyproject.toml is only used to list dependencies and configure tools.
+[tool.setuptools]
+py-modules = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pyflakes and pycodestyle errors, I: import sorting, B: likely bugs, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]
