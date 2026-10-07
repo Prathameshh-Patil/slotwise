@@ -1,0 +1,21 @@
+# One address for the whole app, like a real deployment:
+#   /api/...  -> FastAPI (the /api prefix is stripped before forwarding)
+#   anything else -> Next.js
+# Caddy can also fetch HTTPS certificates automatically: replace ":80" with
+# your domain name (e.g. slotwise.example.com) on a server that owns it.
+:80 {
+	encode gzip
+
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

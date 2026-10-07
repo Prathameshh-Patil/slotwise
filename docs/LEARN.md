@@ -152,3 +152,36 @@ docker compose logs -f beat        # "Scheduler: Sending due task release-expire
 - *No database port in production.* Only the containers can reach Postgres.
 
 **What's left for a real launch.** A real email provider in `send_booking_confirmation`, payments in `confirm_booking`, a reverse proxy with HTTPS, database backups, and rate limiting on login.
+
+## Phase 8: Multi-seat orders and booking history
+
+**What we built.** Users pick up to 10 seats and hold them all at once as an **order**. `order_history` records every change to every order. My bookings shows each order's seats, prices, timestamps and a timeline; admins get an All bookings page with filters (event, status, email), totals, and the power to cancel any order.
+
+**Why it is designed this way.**
+- *All or nothing.* All the seat inserts for an order run in one transaction. If the unique index rejects any one of them, the whole transaction rolls back, so the user never ends up with half the seats they wanted. The error message names the seats that were taken, and the page keeps the others selected.
+- *Deadlocks, and why we sort.* Imagine A wants seats 1 and 2 and B wants 2 and 1. A inserts seat 1 and B inserts seat 2; now A waits for B's seat 2 and B waits for A's seat 1, forever. Postgres notices after about a second and kills one of them. Inserting seats in id order means both start with seat 1, so one simply waits behind the other. We still catch `DeadlockDetected` and answer 409, in case some other path ever locks in a different order. (Our concurrency test couldn't make a deadlock happen even without sorting, because two-seat inserts finish too fast. So the test checks the outcome, not the sorting.)
+- *Status on the order and on each booking.* The order's status is what users see and what confirm/expire update, with a conditional `UPDATE ... RETURNING` as before. Each booking's status is what the unique index looks at. Both always change in the same transaction.
+- *An append-only history table instead of updating rows in place.* `orders` only knows where an order is now. `order_history` keeps every step: who did it, when, and a readable description. Because history rows are written in the same transaction as the change, a history row exists exactly when the change happened. Expiries have no actor, shown as "the system".
+- *Price snapshot.* `bookings.price_cents` is copied from the seat at booking time. Seat prices can change later; receipts mustn't.
+- *Data migration.* Alembic's autogenerate only sees schema, not data. The migration was written by hand: create the new tables, add the new columns as nullable, fill them from the old data with SQL, then make them `NOT NULL` and drop the old columns. Every existing booking became a one-seat order with the same id, so `orders_id_seq` had to be moved past those ids. `tests/test_migrations.py` downgrades the test database, inserts old-style rows, upgrades, and checks the result.
+
+**How to check it.** Pick three seats, hold them, then open My bookings and expand "History and details". As admin, open All bookings and filter by status. In SQL: `docker compose exec db psql -U slotwise -c 'SELECT * FROM order_history ORDER BY id DESC LIMIT 10'`.
+
+## Phase 9: Deploying locally in production mode
+
+**What we built.** `./scripts/deploy_local.sh` builds the production images and runs the full stack behind a **Caddy** reverse proxy at http://localhost:8080. It also checks health, shows logs, backs up the database, and stops or deletes the stack.
+
+**Why it is designed this way.**
+- *A reverse proxy in front.* In a real deployment users reach one address. Caddy forwards `/api/...` to FastAPI (stripping `/api`) and everything else to Next.js. The browser calls `/api` on the same origin, so CORS doesn't apply and the front end doesn't need to know a hostname. On a real server, putting a domain name in the Caddyfile makes Caddy get and renew HTTPS certificates by itself.
+- *`--root-path /api`.* FastAPI doesn't see the `/api` prefix (Caddy removed it), but its docs page must link to `/api/openapi.json`. `root_path` tells it where it is mounted.
+- *A separate Compose project (`-p slotwise-prod`).* Container names, networks and volumes get their own prefix, so the deployment runs next to the dev stack without touching its database.
+- *Secrets generated on the machine.* The script writes `.env.prod` with random passwords using `openssl rand`, readable only by your user (`umask 077`), and git-ignored. Nothing secret is in the repo.
+- *Health before seeding.* `up -d` returns once containers start, not once they work. The script polls `/api/health` before seeding, and the `api` service has a Docker healthcheck too.
+- *Backups.* `backup` runs `pg_dump` inside the database container and saves the SQL to `backups/` (git-ignored). Restore with `psql < file.sql` into an empty database.
+
+**How to check it.**
+```
+./scripts/deploy_local.sh            # then open http://localhost:8080
+./scripts/deploy_local.sh status
+python3 scripts/race_demo.py --api http://localhost:8080/api
+```

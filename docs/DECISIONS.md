@@ -17,3 +17,9 @@ One line per decision, with the reason.
 - Next.js front end calls the API from the browser (client components): pages show live, per-user data, so there is little to gain from server rendering, and it keeps one auth path.
 - Web app on host port 3100: ports 3000 and 3001 are used by other local projects, like Postgres on 5433.
 - One Dockerfile with `dev` and `prod` stages: one set of dependency steps to maintain; prod drops pytest/ruff and runs as a non-root user.
+- Orders group seats: holding several seats is one transaction (all or nothing), and the order is what gets confirmed, cancelled or expired, so a group never ends up half booked.
+- Seats in an order are inserted in id order: two overlapping orders then wait for each other instead of deadlocking. A deadlock is still caught and answered with 409, as a safety net.
+- `order_history` is append-only, written in the same transaction as each status change: the history can't miss a change or record one that rolled back. Expiries are recorded with no actor ("the system").
+- Each booking stores its price: what someone paid shouldn't change if the event's prices do.
+- The orders migration converts existing bookings to one-seat orders by hand-written SQL, and a test downgrades, inserts old-style rows and upgrades again: autogenerate can't write data migrations.
+- Local deployment behind Caddy on one port (8080): the browser calls `/api` on the same origin (no CORS), only the proxy is exposed, and Caddy can get HTTPS certificates automatically on a real domain.

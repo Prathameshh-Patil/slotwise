@@ -1,7 +1,21 @@
-# Production-style stack: no code mounts, no dev tools, no --reload.
-#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# Production-style stack: no code mounts, no dev tools, no --reload, one public port.
+# Easiest way to run it locally: ./scripts/deploy_local.sh
+# By hand: docker compose -p slotwise-prod -f docker-compose.prod.yml --env-file .env.prod up -d --build
 # Required variables fail loudly (the ":?" form) instead of falling back to dev values.
 services:
+  # The only service reachable from outside: routes /api to FastAPI, the rest to Next.js
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+      - web
+
   db:
     image: postgres:17
     restart: unless-stopped
@@ -39,8 +53,16 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
       HOLD_MINUTES: ${HOLD_MINUTES:-10}
       CORS_ORIGINS: '["${WEB_URL:?set WEB_URL}"]'
-    ports:
-      - "8000:8000"
+    # --root-path tells FastAPI it is served under /api, so /api/docs works
+    command: >-
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+      --proxy-headers --forwarded-allow-ips='*' --root-path /api"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     depends_on: &backend-deps
       db:
         condition: service_healthy
@@ -70,12 +92,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        NEXT_PUBLIC_API_URL: ${API_URL:?set API_URL}
+        # Same origin as the page, through the proxy: no CORS, no hard-coded host
+        NEXT_PUBLIC_API_URL: /api
     restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
 
 volumes:
   pgdata:
+  caddy_data:

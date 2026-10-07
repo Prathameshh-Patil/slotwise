@@ -5,6 +5,7 @@ instant. Exactly one should get 201; everyone else should get 409.
 
     python3 scripts/race_demo.py                 # 50 users, a random free seat
     python3 scripts/race_demo.py --users 200 --api http://localhost:8000
+    python3 scripts/race_demo.py --api http://localhost:8080/api   # the local deployment
 
 Only uses the standard library, so it runs with any Python 3.10+.
 """
@@ -70,7 +71,13 @@ def main():
 
     def grab(token):
         barrier.wait()
-        code, _ = call(args.api, "POST", f"/seats/{seat['id']}/hold", token=token)
+        code, _ = call(
+            args.api,
+            "POST",
+            f"/events/{event['id']}/orders",
+            token=token,
+            json_body={"seat_ids": [seat["id"]]},
+        )
         with lock:
             codes[code] += 1
 
