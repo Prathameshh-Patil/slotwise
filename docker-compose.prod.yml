@@ -1,0 +1,81 @@
+# Production-style stack: no code mounts, no dev tools, no --reload.
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# Required variables fail loudly (the ":?" form) instead of falling back to dev values.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    # No "ports": the database is only reachable from the other containers
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  api:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: &backend-env
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      HOLD_MINUTES: ${HOLD_MINUTES:-10}
+      CORS_ORIGINS: '["${WEB_URL:?set WEB_URL}"]'
+    ports:
+      - "8000:8000"
+    depends_on: &backend-deps
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: *backend-env
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    depends_on: *backend-deps
+
+  beat:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: *backend-env
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    depends_on: *backend-deps
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${API_URL:?set API_URL}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

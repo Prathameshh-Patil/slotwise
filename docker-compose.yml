@@ -24,7 +24,9 @@ services:
       retries: 15
 
   api:
-    build: ./backend
+    build: &backend-build
+      context: ./backend
+      target: dev
     env_file: .env
     environment: &backend-env
       # Inside Compose, other services are reachable by name, not localhost
@@ -44,7 +46,7 @@ services:
 
   # Runs background tasks (confirmation emails, releasing expired holds)
   worker:
-    build: ./backend
+    build: *backend-build
     env_file: .env
     environment: *backend-env
     volumes:
@@ -54,7 +56,7 @@ services:
 
   # The clock: puts the "release expired holds" task on the queue every 30 seconds
   beat:
-    build: ./backend
+    build: *backend-build
     env_file: .env
     environment: *backend-env
     volumes:
