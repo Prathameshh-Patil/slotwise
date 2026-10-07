@@ -1,5 +1,7 @@
 # Slotwise in ONE container, for hosts that run a single web service (Render's
-# free plan). Caddy listens on $PORT and routes /api to FastAPI and everything
+# free plan). It lives at the repo root because that is where Render (and most
+# hosts) look for a Dockerfile by default. Local development and the
+# multi-container deployment use backend/Dockerfile and frontend/Dockerfile.prod. Caddy listens on $PORT and routes /api to FastAPI and everything
 # else to Next.js, exactly like docker-compose.prod.yml, but as three processes
 # in one container instead of three containers. Build context: the repo root.
 

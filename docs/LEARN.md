@@ -188,7 +188,7 @@ python3 scripts/race_demo.py --api http://localhost:8080/api
 
 ## Phase 10: A permanent URL on Render
 
-**What we built.** A Render Blueprint (`render.yaml`) and a single-container image (`deploy/render/Dockerfile`) so the app runs on Render's free plan at a fixed `onrender.com` address, redeploying on every push to `main`.
+**What we built.** A Render Blueprint (`render.yaml`) and a single-container image (the root `Dockerfile`, where hosts look by default) so the app runs on Render's free plan at a fixed `onrender.com` address, redeploying on every push to `main`.
 
 **Why it is designed this way.**
 - *Blueprint = infrastructure as code.* The services, database, plans, region and environment variables are in the repo, so the setup can be reviewed, versioned and recreated. `generateValue: true` makes Render create random secrets (`SECRET_KEY`, `SEED_ADMIN_PASSWORD`), so none are typed by hand or committed.

@@ -13,7 +13,7 @@ services:
     runtime: docker
     plan: free
     region: singapore
-    dockerfilePath: ./deploy/render/Dockerfile
+    dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
     autoDeployTrigger: commit

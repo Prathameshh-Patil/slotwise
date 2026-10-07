@@ -3,6 +3,19 @@
 # notices the failure and restarts the whole container.
 set -e
 
+# Without these the app can't start. Say exactly what's missing, because on a
+# host's dashboard this log is often the only clue.
+missing=()
+[[ -z "${DATABASE_URL:-}" ]] && missing+=("DATABASE_URL (a Postgres connection URL)")
+[[ -z "${SECRET_KEY:-}" ]] && missing+=("SECRET_KEY (any long random string)")
+[[ -z "${SEED_ADMIN_PASSWORD:-}" ]] && missing+=("SEED_ADMIN_PASSWORD (the admin login password)")
+if (( ${#missing[@]} )); then
+  echo "Slotwise can't start. Set these environment variables:" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  echo "On Render, creating the app from the Blueprint (render.yaml) sets them all." >&2
+  exit 1
+fi
+
 cd /app/backend
 alembic upgrade head
 python -m app.seed

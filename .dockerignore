@@ -1,4 +1,4 @@
-# Build context for deploy/render/Dockerfile (the repo root). Keep secrets,
+# Build context for the root Dockerfile (the repo root). Keep secrets,
 # local data and machine-specific folders out of the image.
 .git
 .env
