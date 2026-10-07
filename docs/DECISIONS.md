@@ -23,3 +23,5 @@ One line per decision, with the reason.
 - Each booking stores its price: what someone paid shouldn't change if the event's prices do.
 - The orders migration converts existing bookings to one-seat orders by hand-written SQL, and a test downgrades, inserts old-style rows and upgrades again: autogenerate can't write data migrations.
 - Local deployment behind Caddy on one port (8080): the browser calls `/api` on the same origin (no CORS), only the proxy is exposed, and Caddy can get HTTPS certificates automatically on a real domain.
+- Public sharing through a Cloudflare quick tunnel: no account, no open ports on the router, HTTPS included. The trade-off is that it lives only while this machine runs and the URL changes on restart; a named tunnel (Cloudflare account) or a cloud server fixes both.
+- Seed passwords come from the environment, and the deploy script generates a random admin password: a public site seeded with a password that is written in the repo is a site anyone can administer.

@@ -16,6 +16,17 @@ services:
       - api
       - web
 
+  # Optional: a public https://<random>.trycloudflare.com address for the proxy.
+  # Only started with `--profile public` (./scripts/deploy_local.sh public).
+  # Cloudflare's quick tunnels need no account; the URL changes when it restarts.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["public"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://proxy:80
+    depends_on:
+      - proxy
+
   db:
     image: postgres:17
     restart: unless-stopped
@@ -53,6 +64,9 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
       HOLD_MINUTES: ${HOLD_MINUTES:-10}
       CORS_ORIGINS: '["${WEB_URL:?set WEB_URL}"]'
+      # Used by `python -m app.seed`: the admin login must not be the public default
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?set SEED_ADMIN_PASSWORD}
+      SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:-demo12345}
     # --root-path tells FastAPI it is served under /api, so /api/docs works
     command: >-
       sh -c "alembic upgrade head &&

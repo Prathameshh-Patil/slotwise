@@ -107,6 +107,8 @@ This builds the production images and starts the whole stack as its own Compose 
 python3 scripts/race_demo.py --api http://localhost:8080/api
 ```
 
+**Share it publicly:** `./scripts/deploy_local.sh public` opens a Cloudflare quick tunnel and prints a public `https://<random>.trycloudflare.com` URL (no Cloudflare account needed). It works while this Mac and Docker are running; the URL changes each time the tunnel restarts (`./scripts/deploy_local.sh url` prints the current one, `private` closes it). The deployed admin password is random (`SEED_ADMIN_PASSWORD` in `.env.prod`), so the public site can't be taken over with the development default.
+
 To deploy on a real server, run the same thing there and replace `:80` in `deploy/Caddyfile` with your domain: Caddy then gets HTTPS certificates automatically. Set `WEB_URL` in `.env.prod` to the public address.
 
 ## Docs

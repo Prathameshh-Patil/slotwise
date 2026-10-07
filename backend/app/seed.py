@@ -2,8 +2,14 @@
 
 Run with: docker compose exec api python -m app.seed
 Safe to run twice: it skips anything that already exists.
+
+Passwords come from SEED_ADMIN_PASSWORD and SEED_DEMO_PASSWORD when set (a
+public deployment must set at least the admin one); otherwise the development
+defaults below are used. When a password is set, existing users are updated
+to it, so changing it and re-running the seed rotates it.
 """
 
+import os
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -14,8 +20,11 @@ from app.models import Event, User
 from app.schemas.event import EventCreate
 from app.services.events import create_event
 
-# Development-only logins. Never seed a real deployment with these.
-USERS = [("admin@slotwise.dev", "admin12345", True), ("demo@slotwise.dev", "demo12345", False)]
+# (email, env var that overrides the password, development default, is_admin)
+USERS = [
+    ("admin@slotwise.dev", "SEED_ADMIN_PASSWORD", "admin12345", True),
+    ("demo@slotwise.dev", "SEED_DEMO_PASSWORD", "demo12345", False),
+]
 
 
 def main() -> None:
@@ -51,11 +60,17 @@ def main() -> None:
     ]
 
     with SessionLocal() as db:
-        for email, password, is_admin in USERS:
-            if not db.scalar(select(User).where(User.email == email)):
+        for email, env_var, default, is_admin in USERS:
+            configured = os.environ.get(env_var)
+            password = configured or default
+            user = db.scalar(select(User).where(User.email == email))
+            if user is None:
                 hashed = hash_password(password)
                 db.add(User(email=email, hashed_password=hashed, is_admin=is_admin))
-                print(f"Created user {email} / {password}")
+                print(f"Created user {email}")
+            elif configured:
+                user.hashed_password = hash_password(configured)
+                print(f"Set password for {email} from {env_var}")
         db.commit()
 
         for body in events:
