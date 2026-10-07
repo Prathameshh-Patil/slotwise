@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     # Run Celery tasks inline instead of sending them to Redis (used by the tests)
     celery_task_always_eager: bool = False
 
-    # Browser origins allowed to call the API (the Next.js front end)
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # Browser origins allowed to call the API: the Next.js front end in Compose
+    # (port 3100) and when run directly with `npm run dev` (port 3000).
+    # Set as a JSON list, e.g. CORS_ORIGINS='["https://slotwise.example.com"]'
+    cors_origins: list[str] = ["http://localhost:3100", "http://localhost:3000"]
 
 
 settings = Settings()

@@ -15,20 +15,66 @@ services:
       timeout: 5s
       retries: 15
 
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   api:
     build: ./backend
     env_file: .env
-    environment:
-      # Inside Compose, the database is reachable at hostname "db", not localhost
+    environment: &backend-env
+      # Inside Compose, other services are reachable by name, not localhost
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app  # live code: edits on your Mac show up in the container
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    depends_on:
+    # Bring the database schema up to date, then start the server
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on: &backend-deps
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Runs background tasks (confirmation emails, releasing expired holds)
+  worker:
+    build: ./backend
+    env_file: .env
+    environment: *backend-env
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    depends_on: *backend-deps
+
+  # The clock: puts the "release expired holds" task on the queue every 30 seconds
+  beat:
+    build: ./backend
+    env_file: .env
+    environment: *backend-env
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    depends_on: *backend-deps
+
+  web:
+    build: ./frontend
+    environment:
+      # The browser calls the API directly, so this is the address as seen from your Mac
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3100:3000"  # 3100 on your Mac (3000 is taken by another project)
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # keep the container's own node_modules, not the Mac's
+    command: npm run dev
+    depends_on:
+      - api
 
 volumes:
   pgdata:
