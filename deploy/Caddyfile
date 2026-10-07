@@ -1,9 +1,12 @@
 # One address for the whole app, like a real deployment:
 #   /api/...  -> FastAPI (the /api prefix is stripped before forwarding)
 #   anything else -> Next.js
-# Caddy can also fetch HTTPS certificates automatically: replace ":80" with
-# your domain name (e.g. slotwise.example.com) on a server that owns it.
-:80 {
+#
+# SITE_ADDRESS decides how it is served:
+#   unset (local)          -> plain HTTP on :80 inside the container
+#   a hostname (a server)  -> Caddy gets a free HTTPS certificate from
+#                             Let's Encrypt for it and redirects HTTP to HTTPS
+{$SITE_ADDRESS::80} {
 	encode gzip
 
 	handle_path /api/* {

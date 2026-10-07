@@ -85,6 +85,19 @@ cd frontend && npm run lint && npm run build
 | GET | `/orders/{id}` | owner, admin | One order |
 | GET | `/admin/orders` | admin | Everyone's orders; filter with `event_id`, `status`, `email` |
 
+## Deploy on Render (permanent URL)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Prathameshh-Patil/slotwise)
+
+`render.yaml` is a Render Blueprint: in the Render dashboard choose **New > Blueprint**, pick this repo, and click **Apply**. Render creates a free Postgres database and one free web service built from `deploy/render/Dockerfile`, generates `SECRET_KEY` and the admin password, and redeploys on every push to `main`. The site is at `https://slotwise.onrender.com` (or a similar name if that one is taken).
+
+That image runs FastAPI, Next.js and Caddy in **one container**, because the free plan gives one web service: Caddy listens on Render's `$PORT` and routes `/api` to FastAPI and the rest to Next.js. There is no Celery worker on the free plan, so tasks run inline (`CELERY_TASK_ALWAYS_EAGER=true`); seats still free up on time because expiry is checked against the clock.
+
+Free plan limits, from [Render's docs](https://render.com/docs/free):
+- The service sleeps after 15 idle minutes; the next visit takes about a minute.
+- **The free database expires 30 days after it is created** (and is deleted 14 days later). Before then, upgrade it in the dashboard (Postgres > Upgrade), or put another Postgres URL (e.g. a free [Neon](https://neon.tech) database) in the service's `DATABASE_URL`.
+- The admin password is the generated `SEED_ADMIN_PASSWORD` under the service's **Environment** tab.
+
 ## Deploy locally (production mode)
 
 ```

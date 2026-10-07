@@ -1,0 +1,39 @@
+# Render Blueprint: in the Render dashboard choose New > Blueprint, pick this
+# repo, and Render creates everything below. Pushes to main redeploy it.
+#
+# Free plan notes (see https://render.com/docs/free):
+# - the web service sleeps after 15 idle minutes; the next visit takes ~1 minute
+# - the free Postgres database EXPIRES 30 DAYS after creation (then 14 days'
+#   grace before deletion). Upgrade it to a paid plan in the dashboard, or point
+#   DATABASE_URL at another Postgres (e.g. Neon's free tier), before then.
+# - no background worker: Celery tasks run inline (CELERY_TASK_ALWAYS_EAGER)
+services:
+  - type: web
+    name: slotwise
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: slotwise-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SEED_ADMIN_PASSWORD
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: CELERY_TASK_ALWAYS_EAGER
+        value: "true"
+
+databases:
+  - name: slotwise-db
+    plan: free
+    region: singapore
+    databaseName: slotwise
+    user: slotwise

@@ -18,6 +18,8 @@ cd "$(dirname "$0")/.."
 ENV_FILE=.env.prod
 COMPOSE=(docker compose -p slotwise-prod -f docker-compose.prod.yml --env-file "$ENV_FILE")
 
+# On a server, call with SITE_ADDRESS (a hostname), HTTP_PORT=80, HTTPS_PORT=443
+# and WEB_URL=https://<hostname> set; see scripts/deploy_aws.sh.
 create_env_file() {
   local port="${HTTP_PORT:-8080}"
   # Random secrets, generated on this machine and never committed
@@ -29,7 +31,9 @@ POSTGRES_PASSWORD=$(openssl rand -hex 24)
 POSTGRES_DB=slotwise
 SECRET_KEY=$(openssl rand -base64 48 | tr -d '\n')
 HTTP_PORT=$port
-WEB_URL=http://localhost:$port
+HTTPS_PORT=${HTTPS_PORT:-8443}
+SITE_ADDRESS=${SITE_ADDRESS:-:80}
+WEB_URL=${WEB_URL:-http://localhost:$port}
 HOLD_MINUTES=10
 ENV
   echo "Created $ENV_FILE with fresh random secrets."
@@ -50,13 +54,16 @@ tunnel_url() {
     | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1 || true
 }
 
-port() { grep '^HTTP_PORT=' "$ENV_FILE" | cut -d= -f2; }
+web_url() { grep '^WEB_URL=' "$ENV_FILE" | cut -d= -f2; }
 
+# Asks the API from inside its container, so it works whether the proxy serves
+# plain HTTP (local) or redirects to HTTPS (server)
 wait_until_healthy() {
-  local url="http://localhost:$(port)/api/health"
-  printf "Waiting for %s " "$url"
+  printf "Waiting for the API "
   for _ in $(seq 1 90); do
-    if curl -fsS "$url" >/dev/null 2>&1; then
+    if "${COMPOSE[@]}" exec -T api python -c \
+      "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
+      >/dev/null 2>&1; then
       echo "ok"
       return
     fi
@@ -77,8 +84,8 @@ case "${1:-up}" in
     "${COMPOSE[@]}" exec -T api python -m app.seed
     cat <<MSG
 
-Slotwise is running at  http://localhost:$(port)
-API docs:               http://localhost:$(port)/api/docs
+Slotwise is running at  $(web_url)
+API docs:               $(web_url)/api/docs
 Demo login:             demo@slotwise.dev / demo12345
 Admin login:            admin@slotwise.dev / (SEED_ADMIN_PASSWORD in $ENV_FILE)
 MSG

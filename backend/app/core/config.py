@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,16 @@ class Settings(BaseSettings):
     app_name: str = "Slotwise"
     environment: str = "development"
     database_url: str = "postgresql+psycopg://slotwise:slotwise@localhost:5433/slotwise"
+
+    @field_validator("database_url")
+    @classmethod
+    def use_psycopg_driver(cls, url: str) -> str:
+        # Hosts like Render hand out "postgresql://" or "postgres://" URLs, which
+        # SQLAlchemy would open with psycopg2 (not installed). Point them at psycopg 3.
+        for prefix in ("postgresql://", "postgres://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url.removeprefix(prefix)
+        return url
 
     # Signs login tokens. Anyone who knows it can forge a token for any user.
     secret_key: str

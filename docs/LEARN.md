@@ -185,3 +185,17 @@ docker compose logs -f beat        # "Scheduler: Sending due task release-expire
 ./scripts/deploy_local.sh status
 python3 scripts/race_demo.py --api http://localhost:8080/api
 ```
+
+## Phase 10: A permanent URL on Render
+
+**What we built.** A Render Blueprint (`render.yaml`) and a single-container image (`deploy/render/Dockerfile`) so the app runs on Render's free plan at a fixed `onrender.com` address, redeploying on every push to `main`.
+
+**Why it is designed this way.**
+- *Blueprint = infrastructure as code.* The services, database, plans, region and environment variables are in the repo, so the setup can be reviewed, versioned and recreated. `generateValue: true` makes Render create random secrets (`SECRET_KEY`, `SEED_ADMIN_PASSWORD`), so none are typed by hand or committed.
+- *Why one container.* Render's free plan gives one web service. Two free services (API and web) would each sleep and wake separately, and free services can't receive traffic over Render's private network, so the front end would have to call the API's public URL cross-origin. Packing FastAPI, Next.js and Caddy into one container keeps the same `/api` layout as the local deployment, with one URL and one cold start.
+- *Several processes in one container, done carefully.* `start.sh` runs migrations and the seed, starts the three processes in the background, then `wait -n` waits for the first one to exit and exits the container with an error. Without that, a crashed Next.js would leave a half-working container that the host still thinks is healthy. We tested it by killing Next.js inside the container: the container stopped (exit code 143).
+- *No Celery worker.* Free plans have no background workers. `CELERY_TASK_ALWAYS_EAGER=true` runs tasks inside the request instead. Correctness doesn't change, because hold expiry is checked against the clock and done inline when seats are booked. The email log line needed a logging handler for the `app` logger, because uvicorn only configures its own.
+- *Driver in the database URL.* Render gives `postgresql://…`; SQLAlchemy reads that as "use psycopg2". A validator in `config.py` rewrites it to `postgresql+psycopg://`.
+- *Memory.* A free instance has 512 MB. Tested locally with the same limit: about 160 MB in use with one uvicorn worker.
+
+**Limits you must know about.** The free database expires after 30 days (upgrade it, or switch `DATABASE_URL` to a free Neon database), and the service sleeps after 15 idle minutes.
