@@ -10,6 +10,25 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The tests need a real PostgreSQL: the double-booking guarantee is a Postgres index
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: slotwise
+          POSTGRES_PASSWORD: slotwise
+          POSTGRES_DB: slotwise
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slotwise"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # The tests create and use "slotwise_test" next to this database
+      DATABASE_URL: postgresql+psycopg://slotwise:slotwise@localhost:5432/slotwise
+      SECRET_KEY: ci-only-secret-key-not-used-anywhere-else
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -23,5 +42,28 @@ jobs:
         run: ruff check .
       - name: Check formatting
         run: ruff format --check .
+      - name: Check migrations match the models
+        run: alembic upgrade head && alembic check
       - name: Test
         run: pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npx next typegen && npx tsc --noEmit
+      - name: Build
+        run: npm run build

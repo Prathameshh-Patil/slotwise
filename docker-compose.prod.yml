@@ -1,0 +1,117 @@
+# Production-style stack: no code mounts, no dev tools, no --reload, one public port.
+# Easiest way to run it locally: ./scripts/deploy_local.sh
+# By hand: docker compose -p slotwise-prod -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# Required variables fail loudly (the ":?" form) instead of falling back to dev values.
+services:
+  # The only service reachable from outside: routes /api to FastAPI, the rest to Next.js
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - api
+      - web
+
+  # Optional: a public https://<random>.trycloudflare.com address for the proxy.
+  # Only started with `--profile public` (./scripts/deploy_local.sh public).
+  # Cloudflare's quick tunnels need no account; the URL changes when it restarts.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["public"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://proxy:80
+    depends_on:
+      - proxy
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    # No "ports": the database is only reachable from the other containers
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  api:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: &backend-env
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      HOLD_MINUTES: ${HOLD_MINUTES:-10}
+      CORS_ORIGINS: '["${WEB_URL:?set WEB_URL}"]'
+      # Used by `python -m app.seed`: the admin login must not be the public default
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?set SEED_ADMIN_PASSWORD}
+      SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:-demo12345}
+    # --root-path tells FastAPI it is served under /api, so /api/docs works
+    command: >-
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+      --proxy-headers --forwarded-allow-ips='*' --root-path /api"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on: &backend-deps
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: *backend-env
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+    depends_on: *backend-deps
+
+  beat:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment: *backend-env
+    command: celery -A app.tasks.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    depends_on: *backend-deps
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Same origin as the page, through the proxy: no CORS, no hard-coded host
+        NEXT_PUBLIC_API_URL: /api
+    restart: unless-stopped
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  caddy_data:

@@ -28,3 +28,6 @@ test-results/
 .idea/
 *.swp
 .DS_Store
+
+# Database dumps from scripts/deploy_local.sh backup
+backups/
