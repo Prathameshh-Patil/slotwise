@@ -56,7 +56,8 @@ def clean_tables():
     """Every test starts with empty tables."""
     yield
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE users, events, seats, bookings RESTART IDENTITY CASCADE"))
+        tables = "users, events, seats, orders, bookings, order_history"
+        conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
 
 
 @pytest.fixture

@@ -1,23 +1,12 @@
 import string
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Booking, BookingStatus, Event, Seat
+from app.models import Booking, BookingStatus, Event, Order, Seat
 from app.schemas.event import EventCreate, EventOut, SeatOut
-
-
-def occupies_seat(now: datetime):
-    """SQL condition for a booking that currently takes its seat.
-
-    A hold past its expiry no longer counts, even before the background task
-    has marked it expired, so a stalled worker never makes seats look taken.
-    """
-    return or_(
-        Booking.status == BookingStatus.CONFIRMED,
-        and_(Booking.status == BookingStatus.HELD, Booking.hold_expires_at > now),
-    )
+from app.services.orders import occupies_seat
 
 
 def create_event(db: Session, body: EventCreate) -> Event:
@@ -35,7 +24,12 @@ def create_event(db: Session, body: EventCreate) -> Event:
 def list_events(db: Session, event_id: int | None = None) -> list[EventOut]:
     """Upcoming events (or one event by id) with live seat counts."""
     now = datetime.now(UTC)
-    taken = select(Booking.seat_id).where(occupies_seat(now)).subquery()
+    taken = (
+        select(Booking.seat_id)
+        .join(Order, Order.id == Booking.order_id)
+        .where(occupies_seat(now))
+        .subquery()
+    )
     query = (
         select(
             Event,
@@ -68,9 +62,16 @@ def list_events(db: Session, event_id: int | None = None) -> list[EventOut]:
 
 def seat_map(db: Session, event_id: int, viewer_id: int | None) -> list[SeatOut]:
     now = datetime.now(UTC)
+    # Each seat, plus the booking and order currently occupying it (if any)
+    active = (
+        select(Booking.seat_id, Booking.status, Order.user_id)
+        .join(Order, Order.id == Booking.order_id)
+        .where(occupies_seat(now))
+        .subquery()
+    )
     query = (
-        select(Seat, Booking.status, Booking.user_id)
-        .outerjoin(Booking, and_(Booking.seat_id == Seat.id, occupies_seat(now)))
+        select(Seat, active.c.status, active.c.user_id)
+        .outerjoin(active, active.c.seat_id == Seat.id)
         .where(Seat.event_id == event_id)
         .order_by(Seat.row_label, Seat.number)
     )

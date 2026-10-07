@@ -3,49 +3,49 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { OrderCard } from "@/components/order-card";
 import { RequireUser } from "@/components/require-user";
-import { Alert, Button, Card } from "@/components/ui";
-import { api, formatDate, formatPrice, type Booking, type BookingStatus } from "@/lib/api";
-
-const BADGE: Record<BookingStatus, string> = {
-  confirmed: "bg-seat-free/15 text-seat-free",
-  held: "bg-seat-held/15 text-seat-held",
-  cancelled: "bg-border text-muted",
-  expired: "bg-border text-muted",
-};
+import { Alert } from "@/components/ui";
+import { api, type Order } from "@/lib/api";
 
 export default function BookingsPage() {
-  return <RequireUser loginReturnTo="/bookings">{() => <BookingList />}</RequireUser>;
+  return <RequireUser loginReturnTo="/bookings">{() => <OrderList />}</RequireUser>;
 }
 
-function BookingList() {
-  const [bookings, setBookings] = useState<Booking[] | null>(null);
+function OrderList() {
+  const [orders, setOrders] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api<Booking[]>("/bookings/me")
-      .then(setBookings)
+    api<Order[]>("/orders/me")
+      .then(setOrders)
       .catch((e: Error) => setError(e.message));
   }, []);
 
   useEffect(load, [load]);
 
-  async function act(booking: Booking, action: "confirm" | "cancel") {
+  async function act(order: Order, action: "confirm" | "cancel") {
     setError(null);
     try {
-      await api(`/bookings/${booking.id}/${action}`, { method: "POST" });
+      await api(`/orders/${order.id}/${action}`, { method: "POST" });
     } catch (e) {
       setError((e as Error).message);
     }
     load();
   }
 
+  const upcoming = orders?.filter((o) => o.status === "held" || o.status === "confirmed") ?? [];
+  const past = orders?.filter((o) => o.status === "cancelled" || o.status === "expired") ?? [];
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">My bookings</h1>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">My bookings</h1>
+        <p className="mt-1 text-muted">Every order you&apos;ve made, with its full history.</p>
+      </div>
       {error && <Alert>{error}</Alert>}
-      {bookings === null && !error && <p className="text-muted">Loading…</p>}
-      {bookings?.length === 0 && (
+      {orders === null && !error && <p className="text-muted">Loading…</p>}
+      {orders?.length === 0 && (
         <Alert tone="info">
           No bookings yet.{" "}
           <Link href="/" className="font-medium text-accent">
@@ -53,33 +53,27 @@ function BookingList() {
           </Link>
         </Alert>
       )}
-      <div className="space-y-3">
-        {bookings?.map((b) => (
-          <Card key={b.id} className="flex flex-wrap items-center gap-4 p-4">
-            <div className="flex size-12 items-center justify-center rounded-lg bg-background font-mono font-semibold">
-              {b.seat.row_label}
-              {b.seat.number}
-            </div>
-            <div className="min-w-0 flex-1">
-              <Link href={`/events/${b.event.id}`} className="font-medium hover:text-accent">
-                {b.event.title}
-              </Link>
-              <p className="text-sm text-muted">
-                {formatDate(b.event.starts_at)} · {b.event.venue} · {formatPrice(b.seat.price_cents)}
-              </p>
-            </div>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize ${BADGE[b.status]}`}>
-              {b.status}
-            </span>
-            {b.status === "held" && <Button onClick={() => act(b, "confirm")}>Confirm</Button>}
-            {(b.status === "held" || b.status === "confirmed") && (
-              <Button variant="danger" onClick={() => act(b, "cancel")}>
-                Cancel
-              </Button>
-            )}
-          </Card>
-        ))}
-      </div>
+      {upcoming.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium tracking-wide text-muted uppercase">Active</h2>
+          {upcoming.map((o) => (
+            <OrderCard
+              key={o.id}
+              order={o}
+              onConfirm={() => act(o, "confirm")}
+              onCancel={() => act(o, "cancel")}
+            />
+          ))}
+        </section>
+      )}
+      {past.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium tracking-wide text-muted uppercase">Cancelled and expired</h2>
+          {past.map((o) => (
+            <OrderCard key={o.id} order={o} />
+          ))}
+        </section>
+      )}
     </div>
   );
 }

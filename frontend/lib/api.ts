@@ -28,15 +28,30 @@ export type Seat = {
 
 export type BookingStatus = "held" | "confirmed" | "cancelled" | "expired";
 
-export type Booking = {
+export type HistoryEntry = {
+  status: BookingStatus;
+  detail: string;
+  actor_email: string | null; // null: the system did it (e.g. a hold expiring)
+  created_at: string;
+};
+
+// One checkout: one or more seats held, then confirmed, cancelled or expired together
+export type Order = {
   id: number;
   status: BookingStatus;
+  event: { id: number; title: string; venue: string; starts_at: string };
+  seats: { id: number; row_label: string; number: number; price_cents: number }[];
+  total_cents: number;
   hold_expires_at: string | null;
   created_at: string;
   confirmed_at: string | null;
-  seat: { id: number; row_label: string; number: number; price_cents: number };
-  event: { id: number; title: string; venue: string; starts_at: string };
+  cancelled_at: string | null;
+  expired_at: string | null;
+  history: HistoryEntry[];
+  user_email: string;
 };
+
+export const MAX_SEATS_PER_ORDER = 10;
 
 export class ApiError extends Error {
   constructor(
@@ -106,6 +121,21 @@ export async function api<T>(
 
 export function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(cents / 100);
+}
+
+export function seatLabel(seat: { row_label: string; number: number }): string {
+  return `${seat.row_label}${seat.number}`;
+}
+
+export function formatDateTime(iso: string): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(iso));
 }
 
 export function formatDate(iso: string): string {

@@ -7,11 +7,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Card } from "@/components/ui";
 import {
   ApiError,
+  MAX_SEATS_PER_ORDER,
   api,
   formatDate,
   formatPrice,
-  type Booking,
+  seatLabel,
   type EventSummary,
+  type Order,
   type Seat,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -19,10 +21,6 @@ import { useAuth } from "@/lib/auth";
 const POLL_MS = 3000; // how often to refresh the seat map so others' picks show up
 
 type Message = { tone: "error" | "success" | "info"; text: React.ReactNode };
-
-function seatLabel(seat: { row_label: string; number: number }) {
-  return `${seat.row_label}${seat.number}`;
-}
 
 function useCountdown(until: string | null): number {
   const [now, setNow] = useState(() => Date.now());
@@ -44,8 +42,8 @@ export function SeatPicker({ eventId }: { eventId: number }) {
   const router = useRouter();
   const [event, setEvent] = useState<EventSummary | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [hold, setHold] = useState<Booking | null>(null);
+  const [pickedIds, setPickedIds] = useState<number[]>([]);
+  const [hold, setHold] = useState<Order | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -76,16 +74,13 @@ export function SeatPicker({ eventId }: { eventId: number }) {
     return () => clearInterval(timer);
   }, [load, user]);
 
-  // If the user already holds a seat here (e.g. after a page reload), pick it back up
+  // If the user already holds seats here (e.g. after a page reload), pick that back up
   useEffect(() => {
     if (!user) return;
-    api<Booking[]>("/bookings/me")
-      .then((bookings) => {
-        const active = bookings.find((b) => b.event.id === eventId && b.status === "held");
-        if (active) {
-          setHold(active);
-          setSelectedId(active.seat.id);
-        }
+    api<Order[]>("/orders/me")
+      .then((orders) => {
+        const active = orders.find((o) => o.event.id === eventId && o.status === "held");
+        if (active) setHold(active);
       })
       .catch(() => {});
   }, [user, eventId]);
@@ -100,13 +95,24 @@ export function SeatPicker({ eventId }: { eventId: number }) {
     return [...byRow.entries()];
   }, [seats]);
 
-  // A seat someone else grabbed since it was picked (seen on the next poll) is dropped
-  const picked = seats.find((s) => s.id === selectedId);
-  const selected =
-    picked && !holdRanOut && (picked.status === "available" || liveHold) ? picked : null;
+  // Seats someone else grabbed since they were picked (seen on the next poll) drop out
+  const picked = seats.filter((s) => pickedIds.includes(s.id) && s.status === "available");
+  const pickedTotal = picked.reduce((sum, s) => sum + s.price_cents, 0);
 
-  async function holdSeat() {
-    if (!selected) return;
+  function toggle(seat: Seat) {
+    setMessage(null);
+    setHold(null);
+    if (pickedIds.includes(seat.id)) {
+      setPickedIds(pickedIds.filter((id) => id !== seat.id));
+    } else if (picked.length >= MAX_SEATS_PER_ORDER) {
+      setMessage({ tone: "info", text: `You can pick up to ${MAX_SEATS_PER_ORDER} seats at once.` });
+    } else {
+      setPickedIds([...pickedIds, seat.id]);
+    }
+  }
+
+  async function holdSeats() {
+    if (picked.length === 0) return;
     if (!user) {
       router.push(`/login?next=/events/${eventId}`);
       return;
@@ -115,14 +121,18 @@ export function SeatPicker({ eventId }: { eventId: number }) {
     setMessage(null);
     setHold(null);
     try {
-      setHold(await api<Booking>(`/seats/${selected.id}/hold`, { method: "POST" }));
+      const order = await api<Order>(`/events/${eventId}/orders`, {
+        method: "POST",
+        json: { seat_ids: picked.map((s) => s.id) },
+      });
+      setHold(order);
+      setPickedIds([]);
     } catch (err) {
       const text =
         err instanceof ApiError && err.status === 409
-          ? `Too slow! Someone else just took seat ${seatLabel(selected)}. Pick another one.`
+          ? `Too slow! ${err.message} Your other picks are still selected.`
           : (err as Error).message;
       setMessage({ tone: "error", text });
-      setSelectedId(null);
     } finally {
       setBusy(false);
       refresh();
@@ -133,14 +143,14 @@ export function SeatPicker({ eventId }: { eventId: number }) {
     if (!liveHold) return;
     setBusy(true);
     try {
-      const booking = await api<Booking>(`/bookings/${liveHold.id}/confirm`, { method: "POST" });
+      const order = await api<Order>(`/orders/${liveHold.id}/confirm`, { method: "POST" });
       setHold(null);
-      setSelectedId(null);
       setMessage({
         tone: "success",
         text: (
           <>
-            Booked! Seat {seatLabel(booking.seat)} is yours. A confirmation email is on its way.{" "}
+            Booked! {order.seats.map(seatLabel).join(", ")} for {formatPrice(order.total_cents)}.
+            A confirmation email is on its way.{" "}
             <Link href="/bookings" className="font-medium underline">
               See my bookings
             </Link>
@@ -149,7 +159,6 @@ export function SeatPicker({ eventId }: { eventId: number }) {
       });
     } catch (err) {
       setHold(null);
-      setSelectedId(null);
       setMessage({ tone: "error", text: (err as Error).message });
     } finally {
       setBusy(false);
@@ -161,12 +170,11 @@ export function SeatPicker({ eventId }: { eventId: number }) {
     if (!liveHold) return;
     setBusy(true);
     try {
-      await api(`/bookings/${liveHold.id}/cancel`, { method: "POST" });
+      await api(`/orders/${liveHold.id}/cancel`, { method: "POST" });
     } catch {
       // already expired or cancelled: either way the hold is gone
     }
     setHold(null);
-    setSelectedId(null);
     setBusy(false);
     refresh();
   }
@@ -189,10 +197,10 @@ export function SeatPicker({ eventId }: { eventId: number }) {
 
       {message && <Alert tone={message.tone}>{message.text}</Alert>}
       {holdRanOut && (
-        <Alert tone="info">Your hold ran out, so the seat went back on sale. Pick a seat to try again.</Alert>
+        <Alert tone="info">Your hold ran out, so those seats went back on sale. Pick again to retry.</Alert>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <Card className="overflow-x-auto p-5">
           <div className="mx-auto mb-6 w-2/3 rounded-b-xl bg-border py-1.5 text-center text-xs font-medium tracking-widest text-muted uppercase">
             Stage
@@ -205,13 +213,9 @@ export function SeatPicker({ eventId }: { eventId: number }) {
                   <SeatButton
                     key={seat.id}
                     seat={seat}
-                    selected={seat.id === selectedId}
+                    picked={picked.some((p) => p.id === seat.id)}
                     disabled={busy || liveHold !== null}
-                    onSelect={() => {
-                      setMessage(null);
-                      setHold(null);
-                      setSelectedId(seat.id === selectedId ? null : seat.id);
-                    }}
+                    onToggle={() => toggle(seat)}
                   />
                 ))}
               </div>
@@ -224,16 +228,18 @@ export function SeatPicker({ eventId }: { eventId: number }) {
           {liveHold ? (
             <>
               <div>
-                <p className="text-sm text-muted">Seat held for you</p>
-                <p className="text-3xl font-semibold">{seatLabel(liveHold.seat)}</p>
-                <p className="text-sm">{formatPrice(liveHold.seat.price_cents)}</p>
+                <p className="text-sm text-muted">
+                  {liveHold.seats.length === 1 ? "Seat" : `${liveHold.seats.length} seats`} held for you
+                </p>
+                <SeatChips labels={liveHold.seats.map(seatLabel)} />
+                <p className="mt-2 text-lg font-semibold">{formatPrice(liveHold.total_cents)}</p>
               </div>
               <p className="rounded-md bg-seat-held/15 px-3 py-2 text-sm">
                 Confirm within{" "}
                 <span className="font-mono font-semibold">
                   {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")}
                 </span>{" "}
-                or it goes back on sale.
+                or they go back on sale.
               </p>
               <div className="flex gap-2">
                 <Button onClick={confirm} disabled={busy} className="flex-1">
@@ -244,23 +250,36 @@ export function SeatPicker({ eventId }: { eventId: number }) {
                 </Button>
               </div>
             </>
-          ) : selected ? (
+          ) : picked.length > 0 ? (
             <>
               <div>
-                <p className="text-sm text-muted">Selected seat</p>
-                <p className="text-3xl font-semibold">{seatLabel(selected)}</p>
-                <p className="text-sm">{formatPrice(selected.price_cents)}</p>
+                <p className="text-sm text-muted">
+                  {picked.length} of up to {MAX_SEATS_PER_ORDER} seats picked
+                </p>
+                <SeatChips labels={picked.map(seatLabel)} />
+                <p className="mt-2 text-lg font-semibold">{formatPrice(pickedTotal)}</p>
               </div>
-              <Button onClick={holdSeat} disabled={busy} className="w-full">
-                {user ? "Hold this seat" : "Log in to book"}
+              <Button onClick={holdSeats} disabled={busy} className="w-full">
+                {user
+                  ? `Hold ${picked.length === 1 ? "this seat" : `these ${picked.length} seats`}`
+                  : "Log in to book"}
               </Button>
+              <button
+                onClick={() => setPickedIds([])}
+                className="w-full text-center text-sm text-muted hover:text-foreground"
+              >
+                Clear selection
+              </button>
             </>
           ) : (
             <div className="text-sm text-muted">
               <p className="font-medium text-foreground">
                 {event.available_seats} of {event.total_seats} seats left
               </p>
-              <p className="mt-1">Pick a green seat on the map to get started.</p>
+              <p className="mt-1">
+                Click green seats to pick them (up to {MAX_SEATS_PER_ORDER}), then hold them all at
+                once.
+              </p>
             </div>
           )}
         </Card>
@@ -269,36 +288,48 @@ export function SeatPicker({ eventId }: { eventId: number }) {
   );
 }
 
+function SeatChips({ labels }: { labels: string[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {labels.map((label) => (
+        <span key={label} className="rounded-md bg-background px-2 py-1 font-mono text-sm font-semibold">
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function SeatButton({
   seat,
-  selected,
+  picked,
   disabled,
-  onSelect,
+  onToggle,
 }: {
   seat: Seat;
-  selected: boolean;
+  picked: boolean;
   disabled: boolean;
-  onSelect: () => void;
+  onToggle: () => void;
 }) {
   const free = seat.status === "available";
   const color = seat.mine
     ? "bg-accent text-accent-foreground border-accent"
-    : free
-      ? "border-seat-free text-seat-free hover:bg-seat-free hover:text-white"
-      : seat.status === "held"
-        ? "bg-seat-held/70 border-seat-held text-white"
-        : "bg-seat-booked border-seat-booked text-transparent";
-  const state = seat.mine ? "yours" : seat.status;
+    : picked
+      ? "bg-seat-free border-seat-free text-white ring-2 ring-seat-free ring-offset-2 ring-offset-surface"
+      : free
+        ? "border-seat-free text-seat-free hover:bg-seat-free hover:text-white"
+        : seat.status === "held"
+          ? "bg-seat-held/70 border-seat-held text-white"
+          : "bg-seat-booked border-seat-booked text-transparent";
+  const state = seat.mine ? "yours" : picked ? "picked" : seat.status;
   return (
     <button
-      onClick={onSelect}
+      onClick={onToggle}
       disabled={!free || disabled}
       title={`${seatLabel(seat)} · ${formatPrice(seat.price_cents)} · ${state}`}
       aria-label={`Seat ${seatLabel(seat)}, ${state}`}
-      aria-pressed={selected}
-      className={`size-7 rounded-t-lg rounded-b-sm border-2 font-mono text-[10px] transition disabled:cursor-not-allowed ${color} ${
-        selected && !seat.mine ? "bg-seat-free text-white ring-2 ring-seat-free ring-offset-2 ring-offset-surface" : ""
-      }`}
+      aria-pressed={picked}
+      className={`size-7 rounded-t-lg rounded-b-sm border-2 font-mono text-[10px] transition disabled:cursor-not-allowed ${color}`}
     >
       {seat.number}
     </button>
@@ -308,6 +339,7 @@ function SeatButton({
 function Legend() {
   const items = [
     ["border-seat-free", "Available"],
+    ["bg-seat-free border-seat-free", "Picked"],
     ["bg-seat-held/70 border-seat-held", "Held"],
     ["bg-seat-booked border-seat-booked", "Booked"],
     ["bg-accent border-accent", "Yours"],

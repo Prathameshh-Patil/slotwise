@@ -46,6 +46,7 @@ export function Header() {
         <nav className="flex flex-1 items-center gap-1">
           <NavLink href="/">Events</NavLink>
           {user && <NavLink href="/bookings">My bookings</NavLink>}
+          {user?.is_admin && <NavLink href="/admin/orders">All bookings</NavLink>}
           {user?.is_admin && <NavLink href="/admin">New event</NavLink>}
         </nav>
         {loading ? null : user ? (

@@ -43,9 +43,9 @@ def test_list_shows_only_upcoming_events(client, admin_headers):
 def test_seat_map_shows_held_and_booked_seats(client, event, user_headers, make_user):
     a1, a2 = event.seats[0].id, event.seats[1].id
     other_headers = make_user("other@example.com")
-    held = client.post(f"/seats/{a1}/hold", headers=user_headers).json()
-    client.post(f"/bookings/{held['id']}/confirm", headers=user_headers)
-    client.post(f"/seats/{a2}/hold", headers=other_headers)
+    held = client.post(f"/events/{event.id}/orders", json={"seat_ids": [a1]}, headers=user_headers)
+    client.post(f"/orders/{held.json()['id']}/confirm", headers=user_headers)
+    client.post(f"/events/{event.id}/orders", json={"seat_ids": [a2]}, headers=other_headers)
 
     response = client.get(f"/events/{event.id}/seats", headers=user_headers)
     seats = {s["id"]: s for s in response.json()}
