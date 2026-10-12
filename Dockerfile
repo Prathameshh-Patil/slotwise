@@ -14,13 +14,19 @@ COPY frontend/ ./
 ENV NEXT_PUBLIC_API_URL=/api
 RUN npm run build && npm prune --omit=dev
 
+# The official binary carries the cap_net_bind_service file capability. Render
+# runs containers with no-new-privileges, so the kernel refuses to exec it
+# ("Operation not permitted"). $PORT is above 1024, so it isn't needed.
+FROM caddy:2 AS caddy
+RUN setcap -r /usr/bin/caddy
+
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     NODE_ENV=production
 # Node runs `next start`; Caddy is the router. Both are single binaries.
 COPY --from=node:24-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=caddy:2 /usr/bin/caddy /usr/local/bin/caddy
+COPY --from=caddy /usr/bin/caddy /usr/local/bin/caddy
 
 WORKDIR /app/backend
 COPY backend/pyproject.toml .
