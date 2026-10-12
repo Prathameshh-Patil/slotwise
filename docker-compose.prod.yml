@@ -30,6 +30,18 @@ services:
     depends_on:
       - proxy
 
+  # A named tunnel keeps a fixed hostname (PUBLIC_HOSTNAME) on your own domain.
+  # TUNNEL_TOKEN comes from `cloudflared tunnel token <name>`; see the README.
+  named-tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["named"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --url http://proxy:80
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - proxy
+
   db:
     image: postgres:17
     restart: unless-stopped

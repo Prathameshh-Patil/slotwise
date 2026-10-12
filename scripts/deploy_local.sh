@@ -2,7 +2,9 @@
 # Deploy the production stack on this machine, behind one address.
 #
 #   ./scripts/deploy_local.sh            build and start (or update) it, then seed demo data
-#   ./scripts/deploy_local.sh public     also put it on the internet (Cloudflare quick tunnel)
+#   ./scripts/deploy_local.sh public     also put it on the internet (Cloudflare tunnel: your
+#                                        PUBLIC_HOSTNAME if .env.prod has TUNNEL_TOKEN, else a
+#                                        random trycloudflare.com address)
 #   ./scripts/deploy_local.sh private    take it off the internet again
 #   ./scripts/deploy_local.sh status     show the containers
 #   ./scripts/deploy_local.sh logs [svc] follow logs (e.g. logs worker)
@@ -54,6 +56,15 @@ tunnel_url() {
     | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1 || true
 }
 
+env_value() { grep "^$1=" "$ENV_FILE" | cut -d= -f2-; }
+
+# A named tunnel needs both settings; without them `public` uses a quick tunnel
+has_named_tunnel() { [[ -n "$(env_value TUNNEL_TOKEN)" && -n "$(env_value PUBLIC_HOSTNAME)" ]]; }
+
+public_url() {
+  if has_named_tunnel; then echo "https://$(env_value PUBLIC_HOSTNAME)"; else tunnel_url; fi
+}
+
 web_url() { grep '^WEB_URL=' "$ENV_FILE" | cut -d= -f2; }
 
 # Asks the API from inside its container, so it works whether the proxy serves
@@ -91,6 +102,27 @@ Admin login:            admin@slotwise.dev / (SEED_ADMIN_PASSWORD in $ENV_FILE)
 MSG
     ;;
   public)
+    if has_named_tunnel; then
+      "${COMPOSE[@]}" --profile public rm -sf tunnel >/dev/null 2>&1 || true
+      "${COMPOSE[@]}" --profile named up -d named-tunnel
+      url="$(public_url)"
+      printf "Connecting %s " "$url"
+      for _ in $(seq 1 30); do
+        if curl -fsS "$url/api/health" >/dev/null 2>&1; then
+          echo "ok"
+          echo
+          echo "Public URL:  $url"
+          echo "API docs:    $url/api/docs"
+          echo "It works while this Mac is awake and Docker is running, and comes back by itself."
+          exit 0
+        fi
+        printf "."
+        sleep 3
+      done
+      echo
+      echo "The tunnel didn't come up. Look at: $0 logs named-tunnel" >&2
+      exit 1
+    fi
     # Always start a fresh tunnel. A quick tunnel that lost its connection for a
     # while (e.g. the Mac slept) is deleted by Cloudflare and can't come back;
     # an old container would keep retrying it and report its dead URL.
@@ -115,23 +147,23 @@ MSG
     echo "The tunnel didn't come up. Look at: $0 logs tunnel" >&2
     exit 1
     ;;
-  url) tunnel_url ;;
-  private) "${COMPOSE[@]}" --profile public rm -sf tunnel ;;
+  url) public_url ;;
+  private) "${COMPOSE[@]}" --profile public --profile named rm -sf tunnel named-tunnel ;;
   status) "${COMPOSE[@]}" ps ;;
-  logs) "${COMPOSE[@]}" --profile public logs -f "${@:2}" ;;
+  logs) "${COMPOSE[@]}" --profile public --profile named logs -f "${@:2}" ;;
   backup)
     mkdir -p backups
     file="backups/slotwise-$(date +%Y%m%d-%H%M%S).sql"
     "${COMPOSE[@]}" exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$file"
     echo "Saved $file"
     ;;
-  down) "${COMPOSE[@]}" --profile public down ;;
+  down) "${COMPOSE[@]}" --profile public --profile named down ;;
   destroy)
     read -r -p "Delete the deployed database and all its bookings? [y/N] " answer
-    [[ "$answer" == [yY] ]] && "${COMPOSE[@]}" --profile public down -v
+    [[ "$answer" == [yY] ]] && "${COMPOSE[@]}" --profile public --profile named down -v
     ;;
   *)
-    sed -n '2,14p' "$0"
+    sed -n '2,16p' "$0"
     exit 1
     ;;
 esac

@@ -22,7 +22,8 @@ from collections import Counter
 
 
 def call(api, method, path, *, token=None, json_body=None, form=None):
-    headers, data = {}, None
+    # Cloudflare's Browser Integrity Check rejects Python's default User-Agent (error 1010)
+    headers, data = {"User-Agent": "slotwise-race-demo/1.0"}, None
     if json_body is not None:
         data, headers["Content-Type"] = json.dumps(json_body).encode(), "application/json"
     if form is not None:

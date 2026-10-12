@@ -4,7 +4,7 @@ An event booking platform where users pick a seat and book it, and two people cl
 
 Built with Next.js, FastAPI, PostgreSQL, Celery and Redis.
 
-**Live demo:** https://slotwise-b3nt.onrender.com (log in as `demo@slotwise.dev` / `demo12345`; the free instance sleeps when idle, so the first visit can take about a minute)
+**Live demo:** https://slotwise-b3nt.onrender.com (Render), or https://slotwise.visionhub.live (Cloudflare Tunnel to the production stack, up while its host machine runs). Log in as `demo@slotwise.dev` / `demo12345`. The Render instance sleeps when idle, so its first visit can take about a minute.
 
 ## How double booking is prevented
 
@@ -123,6 +123,16 @@ python3 scripts/race_demo.py --api http://localhost:8080/api
 ```
 
 **Share it publicly:** `./scripts/deploy_local.sh public` opens a Cloudflare quick tunnel and prints a public `https://<random>.trycloudflare.com` URL (no Cloudflare account needed). It works while this Mac and Docker are running; the URL changes each time the tunnel restarts (`./scripts/deploy_local.sh url` prints the current one, `private` closes it). The deployed admin password is random (`SEED_ADMIN_PASSWORD` in `.env.prod`), so the public site can't be taken over with the development default.
+
+**A fixed address on your own domain:** if the domain is on Cloudflare, a named tunnel keeps the same hostname across restarts. Once per machine:
+
+```
+cloudflared tunnel login                                   # pick the domain in the browser
+cloudflared tunnel create slotwise
+cloudflared tunnel route dns slotwise slotwise.example.com
+```
+
+Then add `PUBLIC_HOSTNAME=slotwise.example.com` and `TUNNEL_TOKEN=<output of cloudflared tunnel token slotwise>` to `.env.prod`. From then on `public` starts the `named-tunnel` service instead of a quick tunnel, and `url` prints `https://slotwise.example.com`. The tunnel container restarts with Docker, so the site comes back on its own after a reboot.
 
 To deploy on a real server, run the same thing there and replace `:80` in `deploy/Caddyfile` with your domain: Caddy then gets HTTPS certificates automatically. Set `WEB_URL` in `.env.prod` to the public address.
 
