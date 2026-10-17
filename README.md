@@ -4,7 +4,20 @@ An event booking platform where users pick a seat and book it, and two people cl
 
 Built with Next.js, FastAPI, PostgreSQL, Celery and Redis.
 
-**Live demo:** https://slotwise-b3nt.onrender.com (Render), or https://slotwise.visionhub.live (Cloudflare Tunnel to the production stack, up while its host machine runs). Log in as `demo@slotwise.dev` / `demo12345`. The Render instance sleeps when idle, so its first visit can take about a minute.
+**Live demo:** https://slotwise-b3nt.onrender.com. Log in as `demo@slotwise.dev` / `demo12345`. The free instance sleeps when idle, so the first visit can take about a minute.
+
+<!-- Screenshot: add docs/img/seat-map.png (the seat picker mid-booking) and uncomment.
+![Seat map: pick seats, hold them for 10 minutes, then confirm](docs/img/seat-map.png)
+-->
+
+## Features
+
+- **No double booking, guaranteed by Postgres**: a partial unique index, not application checks, so concurrent requests for the same seat get exactly one winner and a clean `409`.
+- **Hold, then confirm**: seats are held for 10 minutes while the user pays; up to 10 seats per order, all or nothing.
+- **Expiry that can't stall**: a Celery beat task releases lapsed holds, and seat status is also computed from the clock, so seats free up on time even if the worker is down.
+- **Append-only booking history** for every order, with per-user and admin views (filters, totals).
+- **Background work off the request path**: confirmation emails go through Celery + Redis with retries (sending is stubbed to the log).
+- **Tested where it matters**: a 12-thread race test against real Postgres, migration tests, and CI that lints, checks migrations against the models, tests and builds the front end.
 
 ## How double booking is prevented
 
@@ -27,13 +40,18 @@ Every status change is written to `order_history`: who held which seats, when th
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    B[Browser] --> W[Next.js<br/>web :3100]
+    W -->|REST + JWT| A[FastAPI<br/>api :8000]
+    A -->|one transaction per order| P[(PostgreSQL<br/>partial unique index)]
+    A -->|enqueue| R[(Redis)]
+    BT[Celery beat<br/>every 30 s] -->|release expired holds| R
+    R --> C[Celery worker<br/>emails, expiring holds]
+    C --> P
 ```
- browser ──► Next.js (web, :3100) ──► FastAPI (api, :8000) ──► PostgreSQL
-                                          │
-                                          └─► Redis ──► Celery worker
-                                                 ▲         (emails, expiring holds)
-                                          Celery beat (every 30 s)
-```
+
+**Stack:** Next.js 16 + React 19 + TypeScript + Tailwind · FastAPI + Pydantic · SQLAlchemy 2 + Alembic · PostgreSQL 17 · Celery + Redis · pytest + ruff · Docker Compose · GitHub Actions · Caddy · Render
 
 | Folder | What it holds |
 | --- | --- |
@@ -68,6 +86,22 @@ docker compose exec api pytest -v           # uses a separate slotwise_test data
 docker compose exec api ruff check .
 cd frontend && npm run lint && npm run build
 ```
+
+### Environment variables
+
+Every variable is in [`.env.example`](.env.example) with a comment. The values there are for local development only.
+
+| Variable | What it does | Required |
+| --- | --- | --- |
+| `SECRET_KEY` | Signs login tokens (JWTs); generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"` | yes |
+| `DATABASE_URL` | PostgreSQL URL; Compose points it at the `db` container | in production |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials the database container is created with | for Compose |
+| `REDIS_URL` | Queue between the API and Celery; Compose points it at `redis` | no |
+| `HOLD_MINUTES` | How long a held seat stays reserved | no (10) |
+| `CORS_ORIGINS` | Browser origins allowed to call the API, as a JSON list | no |
+| `SEED_ADMIN_PASSWORD` / `SEED_DEMO_PASSWORD` | Passwords for the seeded accounts; set them anywhere public | no |
+| `CELERY_TASK_ALWAYS_EAGER` | Run tasks inline, without a worker | no (false) |
+| `NEXT_PUBLIC_API_URL` | Where the browser reaches the API (front end) | no |
 
 ## API
 
